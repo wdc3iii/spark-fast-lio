@@ -82,7 +82,7 @@ add_library(ikd_tree third_party/ikd-Tree/ikd_Tree.cpp)
 set_target_properties(ikd_tree PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Optional: Livox driver
-find_package(livox_ros_driver QUIET)
+find_package(livox_ros_driver2 QUIET)
 
 # Create the library as a component
 add_library(spark_lio_component SHARED
@@ -100,15 +100,15 @@ target_link_libraries(spark_lio_component
 )
 
 # If Livox found, link it here
-if(livox_ros_driver_FOUND)
+if(livox_ros_driver2_FOUND)
   target_link_libraries(spark_lio_component
-    ${livox_ros_driver_LIBRARIES}
+    ${livox_ros_driver2_LIBRARIES}
   )
   target_include_directories(spark_lio_component PRIVATE
-    ${livox_ros_driver_INCLUDE_DIRS}
+    ${livox_ros_driver2_INCLUDE_DIRS}
   )
   target_compile_definitions(spark_lio_component PRIVATE
-    -DLIVOX_ROS_DRIVER_FOUND=${livox_ros_driver_FOUND}
+    -DLIVOX_ROS_DRIVER_FOUND=${livox_ros_driver2_FOUND}
   )
 else()
   message(STATUS "Missing livox driver! AVIA Lidar will be disabled!")

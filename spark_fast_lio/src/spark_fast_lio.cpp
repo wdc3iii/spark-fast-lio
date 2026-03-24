@@ -1,6 +1,7 @@
 #include "spark_fast_lio.h"
 
 #include <cmath>
+#include <filesystem>
 #include <stdexcept>
 
 #include <omp.h>
@@ -88,16 +89,16 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   rclcpp::QoS lidar_qos(rclcpp::KeepLast(10));
   lidar_qos.reliable();
   lidar_qos.durability_volatile();
-  sub_lidar_      = create_subscription<sensor_msgs::msg::PointCloud2>(
-      "lidar",
-      lidar_qos,
-      std::bind(&SPARKFastLIO2::standardLiDARCallback, this, std::placeholders::_1));
-
 #if defined(LIVOX_ROS_DRIVER_FOUND) && LIVOX_ROS_DRIVER_FOUND
   sub_lidar_livox_ = create_subscription<livox_ros_driver2::msg::CustomMsg>(
       "lidar",
       lidar_qos,
-      std::bind(&SPARKFastLIO2::livoxLidarCallback, this, std::placeholders::_1));
+      std::bind(&SPARKFastLIO2::livoxLiDARCallback, this, std::placeholders::_1));
+#else
+  sub_lidar_      = create_subscription<sensor_msgs::msg::PointCloud2>(
+      "lidar",
+      lidar_qos,
+      std::bind(&SPARKFastLIO2::standardLiDARCallback, this, std::placeholders::_1));
 #endif
   auto imu_qos = rclcpp::SensorDataQoS();
   sub_imu_ = create_subscription<sensor_msgs::msg::Imu>(
@@ -388,14 +389,14 @@ void SPARKFastLIO2::standardLiDARCallback(const sensor_msgs::msg::PointCloud2 &m
   sig_buffer_.notify_all();
 }
 
-#if defined(LIVOXROS_DRIVER_FOUND) && LIVOX_ROS_DRIVER_FOUND
+#if defined(LIVOX_ROS_DRIVER_FOUND) && LIVOX_ROS_DRIVER_FOUND
 void SPARKFastLIO2::livoxLiDARCallback(
     const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr msg) {
   static bool timediff_set_flg = false;
 
   std::lock_guard<std::mutex> lk(buffer_mutex_);
   scan_count_++;
-  rclcpp::Time msg_time = msg.header.stamp;
+  rclcpp::Time msg_time = msg->header.stamp;
 
   if (msg_time < last_lidar_timestamp_) {
     RCLCPP_ERROR(get_logger(), "Livox loopback, clearing buffers");
@@ -411,9 +412,9 @@ void SPARKFastLIO2::livoxLiDARCallback(
                            << ", lidar header time: " << last_lidar_timestamp_.nanoseconds());
   }
 
-  if (time_sync_en_ && !timediff_set_flg && diff_s > 1.0 && !imu_buffer.empty()) {
+  if (time_sync_en_ && !timediff_set_flg && diff_s > 1.0 && !imu_buffer_.empty()) {
     timediff_set_flg        = true;
-    timediff_lidar_wrt_imu_ = last_lidar_timestamp_.nanseconds() + static_cast<int64_t>(1.0e8) -
+    timediff_lidar_wrt_imu_ = last_lidar_timestamp_.nanoseconds() + static_cast<int64_t>(1.0e8) -
                               last_imu_timestamp_.nanoseconds();
     RCLCPP_INFO_STREAM(
         this->get_logger(),
@@ -421,7 +422,7 @@ void SPARKFastLIO2::livoxLiDARCallback(
   }
 
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
-  preprocessor_->process(msg, ptr);
+  preprocessor_->process(*msg, ptr);
 
   lidar_buffer_.push_back(ptr);
   time_buffer_.push_back(msg_time.seconds());
@@ -830,7 +831,9 @@ void SPARKFastLIO2::publishFrameWorld(
     if (cloud_to_be_saved_->size() > 0 && pcd_save_interval_ > 0 &&
         scan_wait_num >= pcd_save_interval_) {
       pcd_index_++;
-      std::string all_points_dir(std::string(ROOT_DIR) + "PCD/scans_" + std::to_string(pcd_index_) +
+      std::string pcd_dir = std::string(ROOT_DIR) + "PCD/";
+      std::filesystem::create_directories(pcd_dir);
+      std::string all_points_dir(pcd_dir + "scans_" + std::to_string(pcd_index_) +
                                  ".pcd");
       pcl::PCDWriter pcd_writer;
       std::cout << "Current scan saved to /PCD/ " << all_points_dir << std::endl;
