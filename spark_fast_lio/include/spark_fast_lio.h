@@ -143,8 +143,6 @@ class SPARKFastLIO2 : public rclcpp::Node {
 
   bool syncPackages(MeasureGroup &meas, bool verbose);
 
-  bool isMotionStopped(const V3D &acc_ref, const V3D &acc_curr, const double acc_diff_thr);
-
   void processLidarAndImu(MeasureGroup &Measure);
  private:
   std::mutex buffer_mutex_;
@@ -268,16 +266,18 @@ class SPARKFastLIO2 : public rclcpp::Node {
   double lidar_mean_scantime_ = 0.0;
   int scan_num_               = 0;
 
-  double acc_diff_thr_              = 0.2;
-  int num_moving_frames_thr_        = 10;
-  int num_gravity_measurements_thr_ = 10;
+  double imu_collection_duration_s_ = 1.0;
   bool point_selected_surf_[100000] = {0};
   bool lidar_pushed_                = false;
   bool flg_first_scan_              = true;
   bool flg_exit_                    = false;
   bool flg_EKF_inited_;
 
-  std::deque<V3D> global_gravity_directions_;
+  V3D gravity_accel_sum_ = Zero3d;
+  int gravity_accel_count_ = 0;
+  rclcpp::Time first_imu_stamp_for_gravity_;
+  bool gravity_collection_started_ = false;
+  bool gravity_collection_done_ = false;
 
   BoxPointType localmap_points_;
   std::vector<BoxPointType> cub_needrm_;
@@ -308,7 +308,6 @@ class SPARKFastLIO2 : public rclcpp::Node {
   V3F xaxis_point_body_;
   V3F xaxis_point_world_;
   V3D g_base_;
-  V3D mean_acc_stopped_;
   V3D position_last_;
   V3D lidar_T_wrt_imu_;
   M3D lidar_R_wrt_imu_;

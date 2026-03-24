@@ -21,7 +21,6 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   xaxis_point_body_ << LIDAR_SP_LEN, 0.0, 0.0;
   xaxis_point_world_ << LIDAR_SP_LEN, 0.0, 0.0;
   g_base_            = Zero3d;
-  mean_acc_stopped_  = Zero3d;
   position_last_     = Zero3d;
   lidar_T_wrt_imu_   = Zero3d;
   lidar_R_wrt_imu_   = Eye3d;
@@ -60,10 +59,8 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
 
   enable_gravity_alignment_ =
       declare_parameter<bool>("gravity_alignment.enable_gravity_alignment", true);
-  acc_diff_thr_          = declare_parameter<double>("gravity_alignment.acc_diff_thr", 0.2);
-  num_moving_frames_thr_ = declare_parameter<int>("gravity_alignment.num_moving_frames_thr", 20);
-  num_gravity_measurements_thr_ =
-      declare_parameter<int>("gravity_alignment.num_gravity_measurements_thr", 20);
+  imu_collection_duration_s_ =
+      declare_parameter<double>("gravity_alignment.imu_collection_duration_s", 1.0);
 
   verbose_     = declare_parameter<bool>("verbose", false);
   pcl_verbose_ = declare_parameter<bool>("pcl_verbose", true);
@@ -450,8 +447,33 @@ void SPARKFastLIO2::imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr msg)
                            << " vs. received: " << stamp.nanoseconds() << " [ns]");
     imu_buffer_.clear();
     kf_for_preintegration_.reset();
+    if (!gravity_collection_done_) {
+      gravity_collection_started_ = false;
+      gravity_accel_sum_ = Zero3d;
+      gravity_accel_count_ = 0;
+    }
   }
   last_imu_timestamp_ = stamp;
+
+  // Gravity alignment: accumulate raw IMU accel during startup
+  if (enable_gravity_alignment_ && !gravity_collection_done_) {
+    if (!gravity_collection_started_) {
+      first_imu_stamp_for_gravity_ = stamp;
+      gravity_collection_started_ = true;
+    }
+    double elapsed = (stamp - first_imu_stamp_for_gravity_).seconds();
+    if (elapsed < imu_collection_duration_s_) {
+      const auto &a = msg->linear_acceleration;
+      gravity_accel_sum_ += V3D(a.x, a.y, a.z);
+      gravity_accel_count_++;
+    } else if (gravity_accel_count_ > 0) {
+      gravity_collection_done_ = true;
+      RCLCPP_INFO(get_logger(),
+                  "Gravity alignment: collected %d IMU samples over %.2f s",
+                  gravity_accel_count_,
+                  elapsed);
+    }
+  }
 
   if (kf_for_preintegration_.has_value()) {
     integrateIMU(*kf_for_preintegration_, *imu_input);
@@ -995,12 +1017,6 @@ bool SPARKFastLIO2::syncPackages(MeasureGroup &meas, bool verbose) {
   return true;
 }
 
-bool SPARKFastLIO2::isMotionStopped(const V3D &acc_ref,
-                                    const V3D &acc_curr,
-                                    const double acc_diff_thr) {
-  return (acc_ref - acc_curr).norm() <= acc_diff_thr;
-}
-
 void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   if (flg_first_scan_) {
     first_lidar_time_                = Measures.lidar_beg_time;
@@ -1029,24 +1045,6 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   if (feats_undistort_->empty() || (feats_undistort_ == NULL)) {
     RCLCPP_WARN_STREAM(this->get_logger(), "No point, skip this scan!\n");
     return;
-  }
-
-  static int num_consecutive_moving_frames = 0;
-  if (enable_gravity_alignment_ && !is_gravity_aligned_ && !base_frame_.empty()) {
-    if (!flg_EKF_inited_) {
-      // Assume that it is stationary at the beginning.
-      mean_acc_stopped_ = Measures.getMeanAcc();
-    } else {
-      const auto &mean_acc = Measures.getMeanAcc();
-      if (isMotionStopped(mean_acc_stopped_, mean_acc, acc_diff_thr_)) {
-        RCLCPP_WARN_STREAM(
-            this->get_logger(),
-            "Waiting for motion to perform gravity alignment...now a robot has been stopped");
-        num_consecutive_moving_frames = 0;
-      } else {
-        num_consecutive_moving_frames = min(num_consecutive_moving_frames + 1, 100000);
-      }
-    }
   }
 
   flg_EKF_inited_ = (Measures.lidar_beg_time - first_lidar_time_) < INIT_TIME ? false : true;
@@ -1087,47 +1085,28 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   kf_.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
 
   /***** Perform gravity alignment *****/
-  // NOTE(hlim): Introduce a delay using `num_moving_frames_thr_` to make sure
-  // the gravity vectors are sufficiently updated.
   if (enable_gravity_alignment_ && !is_gravity_aligned_ && !base_frame_.empty() &&
-      (num_consecutive_moving_frames > num_moving_frames_thr_)) {
-    static const auto &offset_R_I_B = lidar_R_wrt_base_ * latest_state_.offset_R_L_I.inverse();
+      gravity_collection_done_) {
+    // Average raw IMU accel (IMU frame), negate to get gravity direction
+    V3D avg_gravity_imu = -(gravity_accel_sum_ / static_cast<double>(gravity_accel_count_));
 
-    // NOTE(hlim): Here, we don't need to normalize the scale of vectors
-    V3D gravity_direction = kf_.get_x().grav;
-    if (global_gravity_directions_.size() < static_cast<size_t>(num_gravity_measurements_thr_)) {
-      {
-        std::stringstream ss;
-        ss << "Waiting for motion: " << global_gravity_directions_.size() << " / "
-           << num_gravity_measurements_thr_;
-        RCLCPP_INFO(this->get_logger(), "%s", ss.str().c_str());
-      }
+    // Transform IMU frame -> base frame
+    const M3D offset_R_I_B = lidar_R_wrt_base_ * latest_state_.offset_R_L_I.inverse();
+    V3D avg_gravity_base = offset_R_I_B * avg_gravity_imu;
 
-      global_gravity_directions_.push_back(offset_R_I_B * gravity_direction);
-    } else {
-      V3D avg_global_gravity_vec = Eigen::Vector3d::Zero();
-      for (const auto &gravity_vec : global_gravity_directions_) {
-        avg_global_gravity_vec += gravity_vec;
-      }
-      avg_global_gravity_vec /= global_gravity_directions_.size();
+    R_gravity_aligned_ = computeRelativeRotation(avg_gravity_base, g_base_);
 
-      R_gravity_aligned_ = computeRelativeRotation(avg_global_gravity_vec, g_base_);
-
-      {
-        std::stringstream ss;
-        ss << "Gravity alignment complete! `R_gravity_aligned`: " << R_gravity_aligned_;
-        RCLCPP_INFO(this->get_logger(), "%s", ss.str().c_str());
-      }
-
-      is_gravity_aligned_ = true;
+    {
+      std::stringstream ss;
+      ss << "Gravity alignment complete! R_gravity_aligned: " << R_gravity_aligned_;
+      RCLCPP_INFO(this->get_logger(), "%s", ss.str().c_str());
     }
+
+    is_gravity_aligned_ = true;
   }
 
   latest_state_          = kf_.get_x();
   kf_for_preintegration_ = kf_;
-  // Update corrected rotation here
-  latest_state_.pos = R_gravity_aligned_ * latest_state_.pos;
-  latest_state_.rot = R_gravity_aligned_ * latest_state_.rot;
 
   if (enable_gravity_alignment_ && !is_gravity_aligned_ && !base_frame_.empty()) {
     RCLCPP_WARN(this->get_logger(),
@@ -1135,10 +1114,16 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
     return;
   }
 
+  // Map update uses unrotated state (consistent with EKF internal frame)
+  mapIncremental();
+
+  // Apply gravity alignment AFTER map update, for publishing only
+  latest_state_.pos = R_gravity_aligned_ * latest_state_.pos;
+  latest_state_.rot = R_gravity_aligned_ * latest_state_.rot;
+
   /******* Publish topics *******/
   const auto stamp = rclcpp::Time(lidar_end_time_ * 1e9);
   publishOdometry(latest_state_, stamp);
-  mapIncremental();
 
   if (path_en_) {
     publishPath(latest_state_);
