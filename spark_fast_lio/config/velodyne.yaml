@@ -1,5 +1,8 @@
 /**:
   ros__parameters:
+    gravity_alignment:
+        heading_lidar: [1.0, 0.0, 0.0]
+
     common:
       lid_topic:  "/acl_jackal2/lidar_points"
   #    imu_topic:  "/acl_jackal2/imu/data"

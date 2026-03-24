@@ -83,6 +83,17 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   auto g_vec = declare_parameter<std::vector<double>>("gravity_alignment.g_base", {0.0, 0.0, -1.0});
   g_base_ << g_vec[0], g_vec[1], g_vec[2];
 
+  auto heading_vec =
+      declare_parameter<std::vector<double>>("gravity_alignment.heading_lidar");
+  if (heading_vec.size() != 3) {
+    throw std::runtime_error("gravity_alignment.heading_lidar must be a 3-element vector");
+  }
+  heading_lidar_ << heading_vec[0], heading_vec[1], heading_vec[2];
+  if (heading_lidar_.norm() < 1e-6) {
+    throw std::runtime_error("gravity_alignment.heading_lidar must be non-zero");
+  }
+  heading_lidar_.normalize();
+
   rclcpp::QoS lidar_qos(rclcpp::KeepLast(10));
   lidar_qos.reliable();
   lidar_qos.durability_volatile();
@@ -1095,6 +1106,17 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
     V3D avg_gravity_base = offset_R_I_B * avg_gravity_imu;
 
     R_gravity_aligned_ = computeRelativeRotation(avg_gravity_base, g_base_);
+
+    // Zero yaw: transform heading from lidar frame to gravity-aligned odom frame
+    V3D heading_odom =
+        R_gravity_aligned_ * latest_state_.rot * latest_state_.offset_R_L_I * heading_lidar_;
+
+    // Extract yaw from the heading projected onto the horizontal plane
+    double yaw = std::atan2(heading_odom.y(), heading_odom.x());
+
+    // Rotate around gravity axis to zero the yaw
+    M3D R_yaw = Eigen::AngleAxisd(-yaw, g_base_.normalized()).toRotationMatrix();
+    R_gravity_aligned_ = R_yaw * R_gravity_aligned_;
 
     {
       std::stringstream ss;

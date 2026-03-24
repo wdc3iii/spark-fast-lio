@@ -1,5 +1,8 @@
 /**:
   ros__parameters:
+    gravity_alignment:
+        heading_lidar: [1.0, 0.0, 0.0]
+
     preprocess:
       # 2 is better in the Kimera-Multi dataset
       lidar_type: 2                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR,

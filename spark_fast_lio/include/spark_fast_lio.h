@@ -308,6 +308,7 @@ class SPARKFastLIO2 : public rclcpp::Node {
   V3F xaxis_point_body_;
   V3F xaxis_point_world_;
   V3D g_base_;
+  V3D heading_lidar_;
   V3D position_last_;
   V3D lidar_T_wrt_imu_;
   M3D lidar_R_wrt_imu_;
