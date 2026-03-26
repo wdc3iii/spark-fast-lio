@@ -520,6 +520,8 @@ void SPARKFastLIO2::integrateIMU(esekfom::esekf<state_ikfom, 12, input_ikfom> &s
   const auto &stamp     = imu_queue[1].header.stamp;
   imu_queue.pop_front();
 
+  if (enable_gravity_alignment_ && !is_gravity_aligned_) return;
+
   integrated_state.pos = R_gravity_aligned_ * integrated_state.pos;
   integrated_state.rot = R_gravity_aligned_ * integrated_state.rot;
 
@@ -1115,7 +1117,7 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
     double yaw = std::atan2(heading_odom.y(), heading_odom.x());
 
     // Rotate around gravity axis to zero the yaw
-    M3D R_yaw = Eigen::AngleAxisd(-yaw, g_base_.normalized()).toRotationMatrix();
+    M3D R_yaw = Eigen::AngleAxisd(yaw, g_base_.normalized()).toRotationMatrix();
     R_gravity_aligned_ = R_yaw * R_gravity_aligned_;
 
     {
