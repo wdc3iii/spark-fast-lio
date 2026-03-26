@@ -84,7 +84,7 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   g_base_ << g_vec[0], g_vec[1], g_vec[2];
 
   auto heading_vec =
-      declare_parameter<std::vector<double>>("gravity_alignment.heading_lidar");
+      declare_parameter<std::vector<double>>("gravity_alignment.heading_lidar", {1.0, 0.0, 0.0});
   if (heading_vec.size() != 3) {
     throw std::runtime_error("gravity_alignment.heading_lidar must be a 3-element vector");
   }
@@ -447,7 +447,7 @@ void SPARKFastLIO2::imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr msg)
 
   auto imu_input = std::make_shared<sensor_msgs::msg::Imu>(*msg);
   if (time_sync_en_ && std::abs(timediff_lidar_wrt_imu_) > static_cast<int64_t>(1.0e8)) {
-    stamp += rclcpp::Duration::from_nanoseconds(timediff_lidar_wrt_imu_);
+    stamp += rclcpp::Duration(timediff_lidar_wrt_imu_);
     imu_input->header.stamp = stamp;
   }
 
