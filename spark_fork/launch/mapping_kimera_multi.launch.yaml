@@ -13,14 +13,14 @@ launch:
   - arg: {name: base_frame,  default: 'base_link'}
 
   # TODO(hlim): To be generalized
-  # - arg: {name: config_path, default: $(find-pkg-share spark_fast_lio)/config/kimera_multi/acl_jackal2.yaml, description: Model-specific configuration}
+  # - arg: {name: config_path, default: $(find-pkg-share spark_fork)/config/kimera_multi/acl_jackal2.yaml, description: Model-specific configuration}
   # - let:
   #   name: config_path
-  #   value: $(find-pkg-share spark_fast_lio)/config/kimera_multi/$(var scene_id).yaml
+  #   value: $(find-pkg-share spark_fork)/config/kimera_multi/$(var scene_id).yaml
 
   - node:
       namespace: $(var scene_id)
-      pkg: spark_fast_lio
+      pkg: spark_fork
       exec: spark_lio_mapping
       name: lio_mapping
       output: screen
@@ -45,7 +45,7 @@ launch:
         - name: "gravity_alignment.enable_gravity_alignment"
           value: false
 
-        - from: $(find-pkg-share spark_fast_lio)/config/kimera_multi/$(var scene_id).yaml
+        - from: $(find-pkg-share spark_fork)/config/kimera_multi/$(var scene_id).yaml
 
   - node:
       if: $(var start_rviz)
@@ -55,4 +55,4 @@ launch:
       launch-prefix: "nice"
       output: "screen"
       args: >
-        -d $(find-pkg-share spark_fast_lio)/rviz/kimera_multi/$(var scene_id).rviz
+        -d $(find-pkg-share spark_fork)/rviz/kimera_multi/$(var scene_id).rviz

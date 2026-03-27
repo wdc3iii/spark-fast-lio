@@ -1,7 +1,7 @@
 ---
 launch:
   - arg: {name: start_rviz, default: 'true', description: automatically start rviz}
-  - arg: {name: rviz_path,  default: $(find-pkg-share spark_fast_lio)/rviz/rviz2.rviz, description: rviz file to load}
+  - arg: {name: rviz_path,  default: $(find-pkg-share spark_fork)/rviz/rviz2.rviz, description: rviz file to load}
   - arg: {name: robot_name, default: 'rrghusky', description: 'The actual robot used when acquiring data' }
 
   # Frames
@@ -10,7 +10,7 @@ launch:
 
   - node:
       namespace: $(var robot_name)
-      pkg: spark_fast_lio
+      pkg: spark_fork
       exec: spark_lio_mapping
       name: lio_mapping
       output: screen
@@ -35,7 +35,7 @@ launch:
         - name: "gravity_alignment.enable_gravity_alignment"
           value: false
 
-        - from: $(find-pkg-share spark_fast_lio)/config/dcist_rrg/$(var robot_name).yaml
+        - from: $(find-pkg-share spark_fork)/config/dcist_rrg/$(var robot_name).yaml
 
   - node:
       if: $(var start_rviz)
@@ -45,4 +45,4 @@ launch:
       launch-prefix: "nice"
       output: "screen"
       args: >
-        -d $(find-pkg-share spark_fast_lio)/rviz/dcist_rrg/$(var robot_name).rviz
+        -d $(find-pkg-share spark_fork)/rviz/dcist_rrg/$(var robot_name).rviz

@@ -8,11 +8,11 @@ launch:
   - arg: {name: map_frame, default: 'odom'}
   - arg: {name: base_frame, default: 'base'}
 
-  - arg: {name: rviz_path,   default: $(find-pkg-share spark_fast_lio)/rviz/velodyne_mit.rviz, description: rviz file to load}
-  - arg: {name: config_path, default: $(find-pkg-share spark_fast_lio)/config/velodyne_mit.yaml, description: Model-specific configuration}
+  - arg: {name: rviz_path,   default: $(find-pkg-share spark_fork)/rviz/velodyne_mit.rviz, description: rviz file to load}
+  - arg: {name: config_path, default: $(find-pkg-share spark_fork)/config/velodyne_mit.yaml, description: Model-specific configuration}
 
   - node:
-      pkg: spark_fast_lio
+      pkg: spark_fork
       exec: spark_lio_mapping
       name: lio_mapping
       output: screen

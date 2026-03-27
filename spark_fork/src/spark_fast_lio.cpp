@@ -108,7 +108,7 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
       lidar_qos,
       std::bind(&SPARKFastLIO2::standardLiDARCallback, this, std::placeholders::_1));
 #endif
-  auto imu_qos = rclcpp::SensorDataQoS();
+  auto imu_qos = rclcpp::SensorDataQoS().keep_last(100);
   sub_imu_ = create_subscription<sensor_msgs::msg::Imu>(
       "imu", imu_qos, std::bind(&SPARKFastLIO2::imuCallback, this, std::placeholders::_1));
 

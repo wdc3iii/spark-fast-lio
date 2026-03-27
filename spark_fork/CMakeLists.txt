@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(spark_fast_lio)
+project(spark_fork)
 
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g -pthread")
