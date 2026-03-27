@@ -192,7 +192,15 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
                 "'point_filter_num_' instead.");
   }
 
+  cloud_pub_thread_ = std::thread(&SPARKFastLIO2::cloudPublishThreadFunc, this);
+
   RCLCPP_INFO(this->get_logger(), "SPARKFastLIO2 constructed");
+}
+
+SPARKFastLIO2::~SPARKFastLIO2() {
+  cloud_pub_exit_.store(true);
+  cloud_pub_cv_.notify_one();
+  if (cloud_pub_thread_.joinable()) cloud_pub_thread_.join();
 }
 
 // Outputs rotation matrix that aligns a to b, i.e., R such that R * g_a = g_b
@@ -362,6 +370,56 @@ void SPARKFastLIO2::pclPointIMUToBase(PointType const *const pi, PointType *cons
   static const auto &offset_R_B_I = latest_state_.offset_R_L_I * lidar_R_wrt_base_.inverse();
   static const auto &offset_T_B_I =
       -1 * offset_R_B_I * lidar_T_wrt_base_ + latest_state_.offset_T_L_I;
+
+  V3D p_body_imu(pi->x, pi->y, pi->z);
+  V3D p_body_base(offset_R_B_I.inverse() * (p_body_imu - offset_T_B_I));
+
+  po->x         = p_body_base(0);
+  po->y         = p_body_base(1);
+  po->z         = p_body_base(2);
+  po->intensity = pi->intensity;
+}
+
+// Overloaded transform helpers that use an explicit state (for the publishing thread)
+void SPARKFastLIO2::pclPointBodyToWorld(PointType const *const pi, PointType *const po,
+                                        const state_ikfom &state) {
+  V3D p_body(pi->x, pi->y, pi->z);
+  V3D p_global(state.rot * (state.offset_R_L_I * p_body + state.offset_T_L_I) + state.pos);
+
+  po->x         = p_global(0);
+  po->y         = p_global(1);
+  po->z         = p_global(2);
+  po->intensity = pi->intensity;
+}
+
+void SPARKFastLIO2::pclPointBodyLidarToIMU(PointType const *const pi, PointType *const po,
+                                           const state_ikfom &state) {
+  V3D p_body_lidar(pi->x, pi->y, pi->z);
+  V3D p_body_imu(state.offset_R_L_I * p_body_lidar + state.offset_T_L_I);
+
+  po->x         = p_body_imu(0);
+  po->y         = p_body_imu(1);
+  po->z         = p_body_imu(2);
+  po->intensity = pi->intensity;
+}
+
+void SPARKFastLIO2::pclPointIMUToLiDAR(PointType const *const pi, PointType *const po,
+                                       const state_ikfom &state) {
+  V3D p_body_imu(pi->x, pi->y, pi->z);
+  V3D p_body_lidar(state.offset_R_L_I.inverse() * (p_body_imu - state.offset_T_L_I));
+
+  po->x         = p_body_lidar(0);
+  po->y         = p_body_lidar(1);
+  po->z         = p_body_lidar(2);
+  po->intensity = pi->intensity;
+}
+
+void SPARKFastLIO2::pclPointIMUToBase(PointType const *const pi, PointType *const po,
+                                      const state_ikfom &state) {
+  // Replicate existing static-capture behavior for consistency
+  static const auto &offset_R_B_I = state.offset_R_L_I * lidar_R_wrt_base_.inverse();
+  static const auto &offset_T_B_I =
+      -1 * offset_R_B_I * lidar_T_wrt_base_ + state.offset_T_L_I;
 
   V3D p_body_imu(pi->x, pi->y, pi->z);
   V3D p_body_base(offset_R_B_I.inverse() * (p_body_imu - offset_T_B_I));
@@ -916,6 +974,123 @@ void SPARKFastLIO2::publishFrame(
   publish_count_ -= PUBFRAME_PERIOD;
 }
 
+// Overloaded publishing functions that use a CloudPublishJob snapshot
+void SPARKFastLIO2::publishFrameWorld(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
+    const CloudPublishJob &job) {
+  PointCloudXYZI::Ptr laserCloudFullRes = job.cloud;
+
+  int size = laserCloudFullRes->points.size();
+  PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+  PointCloudXYZI::Ptr laserCloudTmp(new PointCloudXYZI(size, 1));
+
+  for (int i = 0; i < size; i++) {
+    if (viz_frame_ == "imu") {
+      pclPointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i], job.state);
+    } else if (viz_frame_ == "lidar") {
+      pclPointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudTmp->points[i], job.state);
+      pclPointIMUToLiDAR(&laserCloudTmp->points[i], &laserCloudWorld->points[i], job.state);
+    } else if (viz_frame_ == "base") {
+      pclPointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudTmp->points[i], job.state);
+      pclPointIMUToBase(&laserCloudTmp->points[i], &laserCloudWorld->points[i], job.state);
+    } else {
+      throw std::invalid_argument("Invalid visualization frame has been given");
+    }
+  }
+
+  sensor_msgs::msg::PointCloud2 cloud_msg;
+  pcl::toROSMsg(*laserCloudWorld, cloud_msg);
+  cloud_msg.header.stamp    = rclcpp::Time(job.lidar_end_time * 1e9);
+  cloud_msg.header.frame_id = map_frame_;
+
+  pubCloud->publish(cloud_msg);
+  publish_count_ -= PUBFRAME_PERIOD;
+
+  if (pcd_save_en_) {
+    // Use the full cloud for PCD saving (pcd_cloud if available, else job.cloud)
+    PointCloudXYZI::Ptr pcd_source = job.pcd_cloud ? job.pcd_cloud : job.cloud;
+    int nsize = pcd_source->points.size();
+    PointCloudXYZI::Ptr laserCloudWorld2(new PointCloudXYZI(nsize, 1));
+
+    for (int i = 0; i < nsize; i++) {
+      pclPointBodyToWorld(&pcd_source->points[i], &laserCloudWorld2->points[i], job.state);
+    }
+    if (pcd_save_interval_ > 0) {
+      *cloud_to_be_saved_ += *laserCloudWorld2;
+    }
+
+    static int scan_wait_num = 0;
+    scan_wait_num++;
+    if (cloud_to_be_saved_->size() > 0 && pcd_save_interval_ > 0 &&
+        scan_wait_num >= pcd_save_interval_) {
+      pcd_index_++;
+      std::string pcd_dir = std::string(ROOT_DIR) + "PCD/";
+      std::filesystem::create_directories(pcd_dir);
+      std::string all_points_dir(pcd_dir + "scans_" + std::to_string(pcd_index_) + ".pcd");
+      pcl::PCDWriter pcd_writer;
+      std::cout << "Current scan saved to /PCD/ " << all_points_dir << std::endl;
+      pcd_writer.writeBinary(all_points_dir, *cloud_to_be_saved_);
+      cloud_to_be_saved_->clear();
+      scan_wait_num = 0;
+    }
+  }
+}
+
+void SPARKFastLIO2::publishFrame(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
+    const std::string &frame, const CloudPublishJob &job) {
+  // publishFrame always uses the full undistorted cloud, so use pcd_cloud if dense=false
+  PointCloudXYZI::Ptr source = job.pcd_cloud ? job.pcd_cloud : job.cloud;
+  int size = source->points.size();
+  PointCloudXYZI::Ptr laserCloudTransformed(new PointCloudXYZI(size, 1));
+  sensor_msgs::msg::PointCloud2 cloud_msg;
+
+  if (frame == "lidar") {
+    for (int i = 0; i < size; i++) {
+      laserCloudTransformed->points[i] = source->points[i];
+    }
+    pcl::toROSMsg(*laserCloudTransformed, cloud_msg);
+    cloud_msg.header.stamp    = rclcpp::Time(job.lidar_end_time * 1e9);
+    cloud_msg.header.frame_id = lidar_frame_;
+  } else if (frame == "imu") {
+    for (int i = 0; i < size; i++) {
+      pclPointBodyLidarToIMU(&source->points[i], &laserCloudTransformed->points[i], job.state);
+    }
+    pcl::toROSMsg(*laserCloudTransformed, cloud_msg);
+    cloud_msg.header.stamp    = rclcpp::Time(job.lidar_end_time * 1e9);
+    cloud_msg.header.frame_id = imu_frame_;
+  } else if (frame == "base") {
+    for (int i = 0; i < size; i++) {
+      pclPointBodyLidarToBase(&source->points[i], &laserCloudTransformed->points[i]);
+    }
+    pcl::toROSMsg(*laserCloudTransformed, cloud_msg);
+    cloud_msg.header.stamp    = rclcpp::Time(job.lidar_end_time * 1e9);
+    cloud_msg.header.frame_id = base_frame_;
+  } else {
+    throw std::invalid_argument("Invalid frame has been given");
+  }
+
+  pubCloud->publish(cloud_msg);
+  publish_count_ -= PUBFRAME_PERIOD;
+}
+
+void SPARKFastLIO2::cloudPublishThreadFunc() {
+  while (true) {
+    CloudPublishJob job;
+    {
+      std::unique_lock<std::mutex> lk(cloud_pub_mutex_);
+      cloud_pub_cv_.wait(lk, [&] { return cloud_pub_job_.has_value() || cloud_pub_exit_.load(); });
+      if (cloud_pub_exit_.load() && !cloud_pub_job_.has_value()) return;
+      job = std::move(cloud_pub_job_.value());
+      cloud_pub_job_.reset();
+    }
+    publishFrameWorld(pub_cloud_full_, job);
+    if (job.scan_lidar_pub_en) publishFrame(pub_cloud_lidar_, "lidar", job);
+    if (job.scan_body_pub_en)  publishFrame(pub_cloud_body_, "imu", job);
+    if (job.scan_base_pub_en)  publishFrame(pub_cloud_base_, "base", job);
+  }
+}
+
 PoseStruct SPARKFastLIO2::transformPoseWrtLidarFrame(const state_ikfom &state) const {
   // offset_A_B: transformation matrix of A w.r.t. B
   Eigen::Vector3d lidar_position = state.offset_R_L_I.inverse() * (state.rot * state.offset_T_L_I +
@@ -1153,10 +1328,33 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
     publishPath(latest_state_);
   }
   if (scan_pub_en_) {
-    publishFrameWorld(pub_cloud_full_);
-    if (scan_lidar_pub_en_) publishFrame(pub_cloud_lidar_, "lidar");
-    if (scan_body_pub_en_) publishFrame(pub_cloud_body_, "imu");
-    if (scan_base_pub_en_) publishFrame(pub_cloud_base_, "base");
+    CloudPublishJob job;
+    job.cloud = std::make_shared<PointCloudXYZI>(
+        dense_pub_en_ ? *cloud_undistort_ : *feats_down_body_);
+    // If PCD saving is enabled and we're not publishing dense, we still need the full cloud
+    if (pcd_save_en_ && !dense_pub_en_) {
+      job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
+    }
+    // publishFrame always uses cloud_undistort_ — provide it via pcd_cloud when not dense
+    if (!dense_pub_en_ && (scan_lidar_pub_en_ || scan_body_pub_en_ || scan_base_pub_en_)) {
+      if (!job.pcd_cloud) {
+        job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
+      }
+    }
+    job.state             = latest_state_;
+    job.lidar_end_time    = lidar_end_time_;
+    job.dense             = dense_pub_en_;
+    job.scan_lidar_pub_en = scan_lidar_pub_en_;
+    job.scan_body_pub_en  = scan_body_pub_en_;
+    job.scan_base_pub_en  = scan_base_pub_en_;
+    {
+      std::lock_guard<std::mutex> lk(cloud_pub_mutex_);
+      if (verbose_ && cloud_pub_job_.has_value()) {
+        RCLCPP_WARN(get_logger(), "Cloud publishing thread busy, dropping previous frame");
+      }
+      cloud_pub_job_ = std::move(job);
+    }
+    cloud_pub_cv_.notify_one();
   }
 }
 }  // namespace spark_fast_lio

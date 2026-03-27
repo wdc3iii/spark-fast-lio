@@ -1,8 +1,12 @@
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <Eigen/Core>
@@ -40,9 +44,21 @@ struct PoseStruct {
   Eigen::Quaterniond orientation_;
 };
 
+struct CloudPublishJob {
+  PointCloudXYZI::Ptr cloud;        // deep copy of the cloud to publish
+  PointCloudXYZI::Ptr pcd_cloud;    // full cloud for PCD saving (when dense=false but pcd_save=true)
+  state_ikfom state;                // snapshot of latest_state_
+  double lidar_end_time;            // timestamp
+  bool dense;                       // which cloud was selected
+  bool scan_lidar_pub_en;           // per-frame enable flags
+  bool scan_body_pub_en;
+  bool scan_base_pub_en;
+};
+
 class SPARKFastLIO2 : public rclcpp::Node {
  public:
   explicit SPARKFastLIO2(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
+  ~SPARKFastLIO2();
 
  private:
   M3D computeRelativeRotation(const Eigen::Vector3d &g_a, const Eigen::Vector3d &g_b);
@@ -64,14 +80,22 @@ class SPARKFastLIO2 : public rclcpp::Node {
   }
 
   void pclPointBodyToWorld(PointType const *const pi, PointType *const po);
+  void pclPointBodyToWorld(PointType const *const pi, PointType *const po,
+                           const state_ikfom &state);
 
   void pclPointBodyLidarToIMU(PointType const *const pi, PointType *const po);
+  void pclPointBodyLidarToIMU(PointType const *const pi, PointType *const po,
+                              const state_ikfom &state);
 
   void pclPointBodyLidarToBase(PointType const *const pi, PointType *const po);
 
   void pclPointIMUToLiDAR(PointType const *const pi, PointType *const po);
+  void pclPointIMUToLiDAR(PointType const *const pi, PointType *const po,
+                          const state_ikfom &state);
 
   void pclPointIMUToBase(PointType const *const pi, PointType *const po);
+  void pclPointIMUToBase(PointType const *const pi, PointType *const po,
+                         const state_ikfom &state);
 
   void collectRemovedPoints();
 
@@ -97,9 +121,15 @@ class SPARKFastLIO2 : public rclcpp::Node {
   void publishPath(const state_ikfom &state);
 
   void publishFrameWorld(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud);
+  void publishFrameWorld(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
+                         const CloudPublishJob &job);
 
   void publishFrame(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
                     const std::string &frame);
+  void publishFrame(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
+                    const std::string &frame, const CloudPublishJob &job);
+
+  void cloudPublishThreadFunc();
 
   PoseStruct transformPoseWrtLidarFrame(const state_ikfom &state) const;
 
@@ -252,7 +282,7 @@ class SPARKFastLIO2 : public rclcpp::Node {
   int effect_feat_num_  = 0;
   int time_log_counter_ = 0;
   int scan_count_       = 0;
-  int publish_count_    = 0;
+  std::atomic<int> publish_count_{0};
 
   int iterCount_                = 0;
   int feats_down_size_          = 0;
@@ -330,6 +360,13 @@ class SPARKFastLIO2 : public rclcpp::Node {
 
   std::shared_ptr<Preprocess> preprocessor_;
   std::shared_ptr<ImuProcess> imu_processor_;
+
+  /*** Cloud publishing thread ***/
+  std::mutex cloud_pub_mutex_;
+  std::condition_variable cloud_pub_cv_;
+  std::optional<CloudPublishJob> cloud_pub_job_;
+  std::atomic<bool> cloud_pub_exit_{false};
+  std::thread cloud_pub_thread_;  // must be last — destroyed (joined) before other members
 };
 
 }  // namespace spark_fast_lio
