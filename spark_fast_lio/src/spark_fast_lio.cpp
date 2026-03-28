@@ -112,12 +112,13 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   sub_imu_ = create_subscription<sensor_msgs::msg::Imu>(
       "imu", imu_qos, std::bind(&SPARKFastLIO2::imuCallback, this, std::placeholders::_1));
 
-  rclcpp::QoS qos((rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()));
-  pub_cloud_full_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered", qos);
-  pub_cloud_lidar_ = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_lidar", qos);
-  pub_cloud_body_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_body", qos);
-  pub_cloud_base_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_base", qos);
+  auto cloud_qos = rclcpp::SensorDataQoS();
+  pub_cloud_full_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered", cloud_qos);
+  pub_cloud_lidar_ = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_lidar", cloud_qos);
+  pub_cloud_body_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_body", cloud_qos);
+  pub_cloud_base_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_base", cloud_qos);
 
+  rclcpp::QoS qos((rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()));
   pub_odom_                 = create_publisher<nav_msgs::msg::Odometry>("odometry", qos);
   pub_path_                 = create_publisher<nav_msgs::msg::Path>("path", qos);
   path_msg_.header.frame_id = map_frame_;
