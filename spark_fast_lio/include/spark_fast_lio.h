@@ -79,21 +79,17 @@ class SPARKFastLIO2 : public rclcpp::Node {
     po[2] = p_global(2);
   }
 
-  void pclPointBodyToWorld(PointType const *const pi, PointType *const po);
   void pclPointBodyToWorld(PointType const *const pi, PointType *const po,
                            const state_ikfom &state);
 
-  void pclPointBodyLidarToIMU(PointType const *const pi, PointType *const po);
   void pclPointBodyLidarToIMU(PointType const *const pi, PointType *const po,
                               const state_ikfom &state);
 
   void pclPointBodyLidarToBase(PointType const *const pi, PointType *const po);
 
-  void pclPointIMUToLiDAR(PointType const *const pi, PointType *const po);
   void pclPointIMUToLiDAR(PointType const *const pi, PointType *const po,
                           const state_ikfom &state);
 
-  void pclPointIMUToBase(PointType const *const pi, PointType *const po);
   void pclPointIMUToBase(PointType const *const pi, PointType *const po,
                          const state_ikfom &state);
 
@@ -120,12 +116,9 @@ class SPARKFastLIO2 : public rclcpp::Node {
 
   void publishPath(const state_ikfom &state);
 
-  void publishFrameWorld(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud);
   void publishFrameWorld(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
                          const CloudPublishJob &job);
 
-  void publishFrame(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
-                    const std::string &frame);
   void publishFrame(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
                     const std::string &frame, const CloudPublishJob &job);
 

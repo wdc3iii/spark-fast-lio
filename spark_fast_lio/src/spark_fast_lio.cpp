@@ -323,28 +323,6 @@ void SPARKFastLIO2::pointBodyToWorld(PointType const *const pi,
   po->intensity = pi->intensity;
 }
 
-void SPARKFastLIO2::pclPointBodyToWorld(PointType const *const pi, PointType *const po) {
-  V3D p_body(pi->x, pi->y, pi->z);
-  V3D p_global(latest_state_.rot *
-                   (latest_state_.offset_R_L_I * p_body + latest_state_.offset_T_L_I) +
-               latest_state_.pos);
-
-  po->x         = p_global(0);
-  po->y         = p_global(1);
-  po->z         = p_global(2);
-  po->intensity = pi->intensity;
-}
-
-void SPARKFastLIO2::pclPointBodyLidarToIMU(PointType const *const pi, PointType *const po) {
-  V3D p_body_lidar(pi->x, pi->y, pi->z);
-  V3D p_body_imu(latest_state_.offset_R_L_I * p_body_lidar + latest_state_.offset_T_L_I);
-
-  po->x         = p_body_imu(0);
-  po->y         = p_body_imu(1);
-  po->z         = p_body_imu(2);
-  po->intensity = pi->intensity;
-}
-
 void SPARKFastLIO2::pclPointBodyLidarToBase(PointType const *const pi, PointType *const po) {
   V3D p_body_lidar(pi->x, pi->y, pi->z);
   V3D p_body_base(lidar_R_wrt_base_ * p_body_lidar + lidar_T_wrt_base_);
@@ -355,32 +333,7 @@ void SPARKFastLIO2::pclPointBodyLidarToBase(PointType const *const pi, PointType
   po->intensity = pi->intensity;
 }
 
-void SPARKFastLIO2::pclPointIMUToLiDAR(PointType const *const pi, PointType *const po) {
-  V3D p_body_imu(pi->x, pi->y, pi->z);
-  V3D p_body_lidar(latest_state_.offset_R_L_I.inverse() *
-                   (p_body_imu - latest_state_.offset_T_L_I));
-
-  po->x         = p_body_lidar(0);
-  po->y         = p_body_lidar(1);
-  po->z         = p_body_lidar(2);
-  po->intensity = pi->intensity;
-}
-
-void SPARKFastLIO2::pclPointIMUToBase(PointType const *const pi, PointType *const po) {
-  static const auto &offset_R_B_I = latest_state_.offset_R_L_I * lidar_R_wrt_base_.inverse();
-  static const auto &offset_T_B_I =
-      -1 * offset_R_B_I * lidar_T_wrt_base_ + latest_state_.offset_T_L_I;
-
-  V3D p_body_imu(pi->x, pi->y, pi->z);
-  V3D p_body_base(offset_R_B_I.inverse() * (p_body_imu - offset_T_B_I));
-
-  po->x         = p_body_base(0);
-  po->y         = p_body_base(1);
-  po->z         = p_body_base(2);
-  po->intensity = pi->intensity;
-}
-
-// Overloaded transform helpers that use an explicit state (for the publishing thread)
+// Transform helpers that use an explicit state (for the publishing thread)
 void SPARKFastLIO2::pclPointBodyToWorld(PointType const *const pi, PointType *const po,
                                         const state_ikfom &state) {
   V3D p_body(pi->x, pi->y, pi->z);
@@ -870,111 +823,7 @@ void SPARKFastLIO2::publishPath(const state_ikfom &state) {
   }
 }
 
-void SPARKFastLIO2::publishFrameWorld(
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud) {
-  if (!scan_pub_en_) {
-    return;
-  }
-
-  // choose which cloud to publish
-  PointCloudXYZI::Ptr laserCloudFullRes(dense_pub_en_ ? cloud_undistort_ : feats_down_body_);
-
-  int size = laserCloudFullRes->points.size();
-  // allocate world frames
-  PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
-  PointCloudXYZI::Ptr laserCloudTmp(new PointCloudXYZI(size, 1));
-
-  for (int i = 0; i < size; i++) {
-    if (viz_frame_ == "imu") {
-      pclPointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i]);
-    } else if (viz_frame_ == "lidar") {
-      pclPointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudTmp->points[i]);
-      pclPointIMUToLiDAR(&laserCloudTmp->points[i], &laserCloudWorld->points[i]);
-    } else if (viz_frame_ == "base") {
-      pclPointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudTmp->points[i]);
-      pclPointIMUToBase(&laserCloudTmp->points[i], &laserCloudWorld->points[i]);
-    } else {
-      throw std::invalid_argument("Invalid visualization frame has been given");
-    }
-  }
-
-  sensor_msgs::msg::PointCloud2 cloud_msg;
-  pcl::toROSMsg(*laserCloudWorld, cloud_msg);
-  // use lidar_end_time_ for the timestamp
-  cloud_msg.header.stamp    = rclcpp::Time(lidar_end_time_ * 1e9);  // from seconds
-  cloud_msg.header.frame_id = map_frame_;
-
-  pubCloud->publish(cloud_msg);
-  publish_count_ -= PUBFRAME_PERIOD;
-
-  // Optionally do the pcd_save_en_ part
-  if (pcd_save_en_) {
-    int nsize = cloud_undistort_->points.size();
-    PointCloudXYZI::Ptr laserCloudWorld2(new PointCloudXYZI(nsize, 1));
-
-    for (int i = 0; i < nsize; i++) {
-      pclPointBodyToWorld(&cloud_undistort_->points[i], &laserCloudWorld2->points[i]);
-    }
-    if (pcd_save_interval_ > 0) {
-      *cloud_to_be_saved_ += *laserCloudWorld2;  // see below if you store that as a member
-    }
-
-    static int scan_wait_num = 0;
-    scan_wait_num++;
-    if (cloud_to_be_saved_->size() > 0 && pcd_save_interval_ > 0 &&
-        scan_wait_num >= pcd_save_interval_) {
-      pcd_index_++;
-      std::string pcd_dir = std::string(ROOT_DIR) + "PCD/";
-      std::filesystem::create_directories(pcd_dir);
-      std::string all_points_dir(pcd_dir + "scans_" + std::to_string(pcd_index_) +
-                                 ".pcd");
-      pcl::PCDWriter pcd_writer;
-      std::cout << "Current scan saved to /PCD/ " << all_points_dir << std::endl;
-      pcd_writer.writeBinary(all_points_dir, *cloud_to_be_saved_);
-      cloud_to_be_saved_->clear();
-      scan_wait_num = 0;
-    }
-  }
-}
-
-void SPARKFastLIO2::publishFrame(
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
-    const std::string &frame) {
-  int size = cloud_undistort_->points.size();
-  PointCloudXYZI::Ptr laserCloudTransformed(new PointCloudXYZI(size, 1));
-  sensor_msgs::msg::PointCloud2 cloud_msg;
-
-  if (frame == "lidar") {
-    // direct copy
-    for (int i = 0; i < size; i++) {
-      laserCloudTransformed->points[i] = cloud_undistort_->points[i];
-    }
-    pcl::toROSMsg(*laserCloudTransformed, cloud_msg);
-    cloud_msg.header.stamp    = rclcpp::Time(lidar_end_time_ * 1e9);
-    cloud_msg.header.frame_id = lidar_frame_;
-  } else if (frame == "imu") {
-    for (int i = 0; i < size; i++) {
-      pclPointBodyLidarToIMU(&cloud_undistort_->points[i], &laserCloudTransformed->points[i]);
-    }
-    pcl::toROSMsg(*laserCloudTransformed, cloud_msg);
-    cloud_msg.header.stamp    = rclcpp::Time(lidar_end_time_ * 1e9);
-    cloud_msg.header.frame_id = imu_frame_;
-  } else if (frame == "base") {
-    for (int i = 0; i < size; i++) {
-      pclPointBodyLidarToBase(&cloud_undistort_->points[i], &laserCloudTransformed->points[i]);
-    }
-    pcl::toROSMsg(*laserCloudTransformed, cloud_msg);
-    cloud_msg.header.stamp    = rclcpp::Time(lidar_end_time_ * 1e9);
-    cloud_msg.header.frame_id = base_frame_;
-  } else {
-    throw std::invalid_argument("Invalid frame has been given");
-  }
-
-  pubCloud->publish(cloud_msg);
-  publish_count_ -= PUBFRAME_PERIOD;
-}
-
-// Overloaded publishing functions that use a CloudPublishJob snapshot
+// Publishing functions that use a CloudPublishJob snapshot (called from the publishing thread)
 void SPARKFastLIO2::publishFrameWorld(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
     const CloudPublishJob &job) {
@@ -1308,8 +1157,8 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   kf_for_preintegration_ = kf_;
 
   if (enable_gravity_alignment_ && !is_gravity_aligned_ && !base_frame_.empty()) {
-    RCLCPP_WARN(this->get_logger(),
-                "Gravity alignment is enabled but not yet completed. Waiting for alignment...");
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *clock_, 2000,
+                         "Gravity alignment is enabled but not yet completed. Waiting for alignment...");
     return;
   }
 
