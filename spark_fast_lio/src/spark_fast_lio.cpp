@@ -451,6 +451,17 @@ void SPARKFastLIO2::livoxLiDARCallback(
 #endif
 
 void SPARKFastLIO2::imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr msg) {
+  // DEBUG: detect gaps in IMU callback dispatch (expect ~5ms at 200Hz)
+  {
+    static auto last_cb = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    auto gap_us = std::chrono::duration_cast<std::chrono::microseconds>(now - last_cb).count();
+    if (gap_us > 7000) {  // >7ms gap
+      RCLCPP_WARN(get_logger(), "IMU callback gap: %ld us", gap_us);
+    }
+    last_cb = now;
+  }
+
   ++publish_count_;
 
   rclcpp::Time stamp = msg->header.stamp;
@@ -827,6 +838,7 @@ void SPARKFastLIO2::publishPath(const state_ikfom &state) {
 void SPARKFastLIO2::publishFrameWorld(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
     const CloudPublishJob &job) {
+  auto t_func_start = std::chrono::steady_clock::now();  // DEBUG
   PointCloudXYZI::Ptr laserCloudFullRes = job.cloud;
 
   int size = laserCloudFullRes->points.size();
@@ -852,7 +864,13 @@ void SPARKFastLIO2::publishFrameWorld(
   cloud_msg.header.stamp    = rclcpp::Time(job.lidar_end_time * 1e9);
   cloud_msg.header.frame_id = map_frame_;
 
+  auto t_before_pub = std::chrono::steady_clock::now();  // DEBUG
   pubCloud->publish(cloud_msg);
+  auto t_after_pub = std::chrono::steady_clock::now();  // DEBUG
+  RCLCPP_INFO(get_logger(), "cloud publish(): %ld us, transforms+toROSMsg: %ld us, cloud size: %d",
+      std::chrono::duration_cast<std::chrono::microseconds>(t_after_pub - t_before_pub).count(),
+      std::chrono::duration_cast<std::chrono::microseconds>(t_before_pub - t_func_start).count(),
+      size);
   publish_count_ -= PUBFRAME_PERIOD;
 
   if (pcd_save_en_) {
