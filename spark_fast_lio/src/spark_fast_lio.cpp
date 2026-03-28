@@ -1329,16 +1329,16 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   }
   if (scan_pub_en_) {
     CloudPublishJob job;
-    job.cloud = std::make_shared<PointCloudXYZI>(
-        dense_pub_en_ ? *cloud_undistort_ : *feats_down_body_);
+    job.cloud = PointCloudXYZI::Ptr(new PointCloudXYZI(
+        dense_pub_en_ ? *cloud_undistort_ : *feats_down_body_));
     // If PCD saving is enabled and we're not publishing dense, we still need the full cloud
     if (pcd_save_en_ && !dense_pub_en_) {
-      job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
+      job.pcd_cloud = PointCloudXYZI::Ptr(new PointCloudXYZI(*cloud_undistort_));
     }
     // publishFrame always uses cloud_undistort_ — provide it via pcd_cloud when not dense
     if (!dense_pub_en_ && (scan_lidar_pub_en_ || scan_body_pub_en_ || scan_base_pub_en_)) {
       if (!job.pcd_cloud) {
-        job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
+        job.pcd_cloud = PointCloudXYZI::Ptr(new PointCloudXYZI(*cloud_undistort_));
       }
     }
     job.state             = latest_state_;
