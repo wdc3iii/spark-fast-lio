@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 project(spark_fast_lio)
 
 set(CMAKE_BUILD_TYPE "Release")
@@ -91,7 +91,7 @@ add_library(spark_lio_component SHARED
 )
 
 # Example: C++ standard
-target_compile_features(spark_lio_component PUBLIC cxx_std_20)
+target_compile_features(spark_lio_component PUBLIC cxx_std_17)
 
 # Link external libs. Replace `ikd_tree` with your actual library name
 target_link_libraries(spark_lio_component

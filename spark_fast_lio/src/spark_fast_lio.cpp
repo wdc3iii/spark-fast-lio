@@ -84,7 +84,7 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   g_base_ << g_vec[0], g_vec[1], g_vec[2];
 
   auto heading_vec =
-      declare_parameter<std::vector<double>>("gravity_alignment.heading_lidar");
+      declare_parameter<std::vector<double>>("gravity_alignment.heading_lidar", {1.0, 0.0, 0.0});
   if (heading_vec.size() != 3) {
     throw std::runtime_error("gravity_alignment.heading_lidar must be a 3-element vector");
   }
@@ -249,7 +249,7 @@ bool SPARKFastLIO2::lookupBaseExtrinsics(V3D &lidar_T_wrt_base, M3D &lidar_R_wrt
   bool has_transform     = false;
   std::string err_str;
   auto start_time          = this->now();
-  rclcpp::Duration timeout = rclcpp::Duration::from_seconds(extrinsics_timeout_s_);
+  rclcpp::Duration timeout = rclcpp::Duration(static_cast<int64_t>(extrinsics_timeout_s_ * 1e9));
   rclcpp::Rate rate(10.0);  // Just 10 Hz works
 
   while (rclcpp::ok()) {
@@ -269,7 +269,7 @@ bool SPARKFastLIO2::lookupBaseExtrinsics(V3D &lidar_T_wrt_base, M3D &lidar_R_wrt
       break;
     }
 
-    RCLCPP_WARN_STREAM_SKIPFIRST_THROTTLE(get_logger(),
+    RCLCPP_WARN_STREAM_THROTTLE(get_logger(),
                                           *clock_,
                                           5000,
                                           "Waiting for transform from '" << lidar_frame_ << "' to '"
@@ -458,7 +458,7 @@ void SPARKFastLIO2::imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr msg)
 
   auto imu_input = std::make_shared<sensor_msgs::msg::Imu>(*msg);
   if (time_sync_en_ && std::abs(timediff_lidar_wrt_imu_) > static_cast<int64_t>(1.0e8)) {
-    stamp += rclcpp::Duration::from_nanoseconds(timediff_lidar_wrt_imu_);
+    stamp += rclcpp::Duration(timediff_lidar_wrt_imu_);
     imu_input->header.stamp = stamp;
   }
 
@@ -1178,16 +1178,16 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   }
   if (scan_pub_en_) {
     CloudPublishJob job;
-    job.cloud = std::make_shared<PointCloudXYZI>(
-        dense_pub_en_ ? *cloud_undistort_ : *feats_down_body_);
+    job.cloud = PointCloudXYZI::Ptr(new PointCloudXYZI(
+        dense_pub_en_ ? *cloud_undistort_ : *feats_down_body_));
     // If PCD saving is enabled and we're not publishing dense, we still need the full cloud
     if (pcd_save_en_ && !dense_pub_en_) {
-      job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
+      job.pcd_cloud = PointCloudXYZI::Ptr(new PointCloudXYZI(*cloud_undistort_));
     }
     // publishFrame always uses cloud_undistort_ — provide it via pcd_cloud when not dense
     if (!dense_pub_en_ && (scan_lidar_pub_en_ || scan_body_pub_en_ || scan_base_pub_en_)) {
       if (!job.pcd_cloud) {
-        job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
+        job.pcd_cloud = PointCloudXYZI::Ptr(new PointCloudXYZI(*cloud_undistort_));
       }
     }
     job.state             = latest_state_;
