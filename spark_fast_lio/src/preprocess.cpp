@@ -85,8 +85,9 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2 &msg, PointCloudXYZ
       hesai_handler(msg);
       break;
 
+    case DEFAULT_LIDAR:
     default:
-      RCLCPP_FATAL(rclcpp::get_logger("Preprocess"), "Error LiDAR Type");
+      default_handler(msg);
       break;
   }
   *pcl_out = pl_surf;
@@ -575,6 +576,36 @@ void Preprocess::hesai_handler(const sensor_msgs::msg::PointCloud2 &msg) {
 
     if (i % point_filter_num == 0) {
       pl_surf.push_back(std::move(added_pt));
+    }
+  }
+}
+
+void Preprocess::default_handler(const sensor_msgs::msg::PointCloud2 &msg) {
+  pl_surf.clear();
+  pl_corn.clear();
+  pl_full.clear();
+  pl_from_pilots.clear();
+
+  pcl::PointCloud<pcl::PointXYZI> pl_orig;
+  pcl::fromROSMsg(msg, pl_orig);
+  const auto plsize = pl_orig.points.size();
+  if (plsize == 0) return;
+  pl_surf.reserve(plsize);
+
+  for (size_t i = 0; i < plsize; ++i) {
+    PointType added_pt;
+    added_pt.normal_x  = 0;
+    added_pt.normal_y  = 0;
+    added_pt.normal_z  = 0;
+    added_pt.x         = pl_orig.points[i].x;
+    added_pt.y         = pl_orig.points[i].y;
+    added_pt.z         = pl_orig.points[i].z;
+    added_pt.intensity = pl_orig.points[i].intensity;
+    added_pt.curvature = 0.0;
+
+    if (added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z >
+        (blind * blind)) {
+      pl_surf.push_back(added_pt);
     }
   }
 }
