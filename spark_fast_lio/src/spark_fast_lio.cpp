@@ -94,20 +94,34 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   }
   heading_lidar_.normalize();
 
+  preprocessor_->blind = declare_parameter<double>("preprocess.blind", 0.01);
+  preprocessor_->blind_for_human_pilots =
+      declare_parameter<double>("preprocess.blind_for_human_pilots", 1.5);
+  preprocessor_->lidar_type =
+      declare_parameter<int>("preprocess.lidar_type", static_cast<int>(AVIA));
+  preprocessor_->N_SCANS = declare_parameter<int>("preprocess.scan_line", 16);
+  preprocessor_->time_unit =
+      declare_parameter<int>("preprocess.timestamp_unit", static_cast<int>(US));
+  preprocessor_->SCAN_RATE        = declare_parameter<int>("preprocess.scan_rate", 10);
+  preprocessor_->point_filter_num = declare_parameter<int>("point_filter_num_for_preprocessing", 1);
+
   rclcpp::QoS lidar_qos(rclcpp::KeepLast(10));
   lidar_qos.reliable();
   lidar_qos.durability_volatile();
 #if defined(LIVOX_ROS_DRIVER_FOUND) && LIVOX_ROS_DRIVER_FOUND
-  sub_lidar_livox_ = create_subscription<livox_ros_driver2::msg::CustomMsg>(
-      "lidar",
-      lidar_qos,
-      std::bind(&SPARKFastLIO2::livoxLiDARCallback, this, std::placeholders::_1));
-#else
-  sub_lidar_      = create_subscription<sensor_msgs::msg::PointCloud2>(
-      "lidar",
-      lidar_qos,
-      std::bind(&SPARKFastLIO2::standardLiDARCallback, this, std::placeholders::_1));
+  if (preprocessor_->lidar_type == AVIA) {
+    sub_lidar_livox_ = create_subscription<livox_ros_driver2::msg::CustomMsg>(
+        "lidar",
+        lidar_qos,
+        std::bind(&SPARKFastLIO2::livoxLiDARCallback, this, std::placeholders::_1));
+  } else
 #endif
+  {
+    sub_lidar_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+        "lidar",
+        lidar_qos,
+        std::bind(&SPARKFastLIO2::standardLiDARCallback, this, std::placeholders::_1));
+  }
   auto imu_qos = rclcpp::SensorDataQoS().keep_last(50);
   sub_imu_ = create_subscription<sensor_msgs::msg::Imu>(
       "imu", imu_qos, std::bind(&SPARKFastLIO2::imuCallback, this, std::placeholders::_1));
@@ -126,19 +140,6 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   tf_buffer_      = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-  preprocessor_        = std::make_shared<Preprocess>();
-  preprocessor_->blind = declare_parameter<double>("preprocess.blind", 0.01);
-  preprocessor_->blind_for_human_pilots =
-      declare_parameter<double>("preprocess.blind_for_human_pilots", 1.5);
-  preprocessor_->lidar_type =
-      declare_parameter<int>("preprocess.lidar_type", static_cast<int>(AVIA));
-  preprocessor_->N_SCANS = declare_parameter<int>("preprocess.scan_line", 16);
-  preprocessor_->time_unit =
-      declare_parameter<int>("preprocess.timestamp_unit", static_cast<int>(US));
-  preprocessor_->SCAN_RATE        = declare_parameter<int>("preprocess.scan_rate", 10);
-  preprocessor_->point_filter_num = declare_parameter<int>("point_filter_num_for_preprocessing", 1);
-
-  imu_processor_ = std::make_shared<ImuProcess>();
   if (extrinT_.size() == 3 && extrinR_.size() == 9) {
     Eigen::Vector3d t_lidar(extrinT_[0], extrinT_[1], extrinT_[2]);
     Eigen::Matrix3d R_lidar;
