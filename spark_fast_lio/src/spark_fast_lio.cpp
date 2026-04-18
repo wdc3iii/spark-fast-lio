@@ -1001,7 +1001,14 @@ bool SPARKFastLIO2::syncPackages(MeasureGroup &meas, bool verbose) {
     meas.lidar_beg_time       = time_buffer_.front();
     static double denominator = 1000;
 
-    if (meas.lidar->points.size() <= 1) {
+    if (preprocessor_->lidar_type == DEFAULT_LIDAR) {
+      // default_handler does not populate per-point timestamps and is intended
+      // for inputs where every ray is cast at the scan's header stamp (e.g.
+      // simulated scans). Treat the scan as instantaneous so downstream
+      // message stamps match the observation time and no bogus deskew window
+      // is introduced.
+      lidar_end_time_ = meas.lidar_beg_time;
+    } else if (meas.lidar->points.size() <= 1) {
       lidar_end_time_ = meas.lidar_beg_time + lidar_mean_scantime_;
     } else if (meas.lidar->points.back().curvature / denominator < 0.5 * lidar_mean_scantime_) {
       lidar_end_time_ = meas.lidar_beg_time + lidar_mean_scantime_;
