@@ -47,9 +47,11 @@ struct PoseStruct {
 struct CloudPublishJob {
   PointCloudXYZI::Ptr cloud;        // deep copy of the cloud to publish
   PointCloudXYZI::Ptr pcd_cloud;    // full cloud for PCD saving (when dense=false but pcd_save=true)
+  PointCloudXYZI::Ptr full_cloud;   // full deskewed cloud for cloud_registered_dense
   state_ikfom state;                // snapshot of latest_state_
   double lidar_end_time;            // timestamp
   bool dense;                       // which cloud was selected
+  bool dense_full_pub_en;           // publish the full cloud on cloud_registered_dense
   bool scan_lidar_pub_en;           // per-frame enable flags
   bool scan_body_pub_en;
   bool scan_base_pub_en;
@@ -116,6 +118,9 @@ class SPARKFastLIO2 : public rclcpp::Node {
 
   void publishPath(const state_ikfom &state);
 
+  void publishFrameWorldDense(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
+                              const CloudPublishJob &job);
+
   void publishFrameWorld(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
                          const CloudPublishJob &job);
 
@@ -179,6 +184,7 @@ class SPARKFastLIO2 : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_full_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_full_dense_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_lidar_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_body_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_base_;
@@ -227,6 +233,7 @@ class SPARKFastLIO2 : public rclcpp::Node {
   bool path_en_           = true;
   bool scan_pub_en_       = false;
   bool dense_pub_en_      = false;
+  bool dense_full_pub_en_ = false;
   bool scan_lidar_pub_en_ = false;
   bool scan_body_pub_en_  = false;
   bool scan_base_pub_en_  = false;
@@ -284,6 +291,9 @@ class SPARKFastLIO2 : public rclcpp::Node {
   int pcd_save_interval_        = -1;
   int pcd_index_                = 0;
   int point_filter_num_         = 4;  // empirically, 4 showed the best performance
+  // LIO-only near-range cut, applied after deskewing against each point's raw
+  // pre-deskew range. 0 disables it. preprocess.blind still cuts every cloud.
+  double blind_lio_             = 0.0;
   int feats_down_size_neighbor_ = numeric_limits<int>::max();
 
   double lidar_mean_scantime_ = 0.0;

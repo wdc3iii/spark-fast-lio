@@ -32,6 +32,7 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   path_en_           = declare_parameter<bool>("publish.path_en", true);
   scan_pub_en_       = declare_parameter<bool>("publish.scan_publish_en", false);
   dense_pub_en_      = declare_parameter<bool>("publish.dense_publish_en", false);
+  dense_full_pub_en_ = declare_parameter<bool>("publish.dense_full_publish_en", false);
   scan_lidar_pub_en_ = declare_parameter<bool>("publish.scan_lidarframe_pub_en", false);
   scan_body_pub_en_  = declare_parameter<bool>("publish.scan_bodyframe_pub_en", false);
   scan_base_pub_en_  = declare_parameter<bool>("publish.scan_baseframe_pub_en", false);
@@ -95,6 +96,7 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
   heading_lidar_.normalize();
 
   preprocessor_->blind = declare_parameter<double>("preprocess.blind", 0.01);
+  blind_lio_           = declare_parameter<double>("preprocess.blind_lio", 0.0);
   preprocessor_->blind_for_human_pilots =
       declare_parameter<double>("preprocess.blind_for_human_pilots", 1.5);
   preprocessor_->lidar_type =
@@ -128,6 +130,8 @@ SPARKFastLIO2::SPARKFastLIO2(const rclcpp::NodeOptions &options)
 
   rclcpp::QoS qos((rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()));
   pub_cloud_full_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered", qos);
+  pub_cloud_full_dense_ =
+      create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_dense", qos);
   pub_cloud_lidar_ = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_lidar", qos);
   pub_cloud_body_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_body", qos);
   pub_cloud_base_  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_base", qos);
@@ -824,6 +828,38 @@ void SPARKFastLIO2::publishPath(const state_ikfom &state) {
   }
 }
 
+// Full deskewed scan in the world frame: every point preprocess kept, motion
+// compensated with the same IMU propagation the LIO used, but without the
+// point_filter_num / blind_lio thinning that only the EKF needs.
+void SPARKFastLIO2::publishFrameWorldDense(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
+    const CloudPublishJob &job) {
+  PointCloudXYZI::Ptr source = job.full_cloud ? job.full_cloud : job.cloud;
+  int size                   = source->points.size();
+  PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+  PointCloudXYZI::Ptr laserCloudTmp(new PointCloudXYZI(size, 1));
+
+  for (int i = 0; i < size; i++) {
+    if (viz_frame_ == "imu") {
+      pclPointBodyToWorld(&source->points[i], &laserCloudWorld->points[i], job.state);
+    } else if (viz_frame_ == "lidar") {
+      pclPointBodyToWorld(&source->points[i], &laserCloudTmp->points[i], job.state);
+      pclPointIMUToLiDAR(&laserCloudTmp->points[i], &laserCloudWorld->points[i], job.state);
+    } else if (viz_frame_ == "base") {
+      pclPointBodyToWorld(&source->points[i], &laserCloudTmp->points[i], job.state);
+      pclPointIMUToBase(&laserCloudTmp->points[i], &laserCloudWorld->points[i], job.state);
+    } else {
+      throw std::invalid_argument("Invalid visualization frame has been given");
+    }
+  }
+
+  sensor_msgs::msg::PointCloud2 cloud_msg;
+  pcl::toROSMsg(*laserCloudWorld, cloud_msg);
+  cloud_msg.header.stamp    = rclcpp::Time(job.lidar_end_time * 1e9);
+  cloud_msg.header.frame_id = map_frame_;
+  pubCloud->publish(cloud_msg);
+}
+
 // Publishing functions that use a CloudPublishJob snapshot (called from the publishing thread)
 void SPARKFastLIO2::publishFrameWorld(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubCloud,
@@ -935,6 +971,7 @@ void SPARKFastLIO2::cloudPublishThreadFunc() {
       cloud_pub_job_.reset();
     }
     publishFrameWorld(pub_cloud_full_, job);
+    if (job.dense_full_pub_en) publishFrameWorldDense(pub_cloud_full_dense_, job);
     if (job.scan_lidar_pub_en) publishFrame(pub_cloud_lidar_, "lidar", job);
     if (job.scan_body_pub_en)  publishFrame(pub_cloud_body_, "imu", job);
     if (job.scan_base_pub_en)  publishFrame(pub_cloud_base_, "base", job);
@@ -1077,12 +1114,14 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   feats_undistort_->clear();
 
   imu_processor_->Process(Measures, kf_, cloud_undistort_);
-  feats_undistort_->reserve(cloud_undistort_->size() / point_filter_num_);
+  feats_undistort_->reserve(cloud_undistort_->size() / std::max(point_filter_num_, 1));
 
   for (size_t i = 0; i < cloud_undistort_->points.size(); i++) {
-    if (i % point_filter_num_ == 0) {
-      feats_undistort_->push_back(cloud_undistort_->points[i]);
-    }
+    const PointType &pt = cloud_undistort_->points[i];
+    if (point_filter_num_ > 1 && (i % point_filter_num_) != 0) continue;
+    // normal_x carries the raw pre-deskew range, so the cut radius is exact
+    if (pt.normal_x < blind_lio_) continue;
+    feats_undistort_->push_back(pt);
   }
 
   latest_state_ = kf_.get_x();
@@ -1186,21 +1225,21 @@ void SPARKFastLIO2::processLidarAndImu(MeasureGroup &Measures) {
   }
   if (scan_pub_en_) {
     CloudPublishJob job;
-    job.cloud = std::make_shared<PointCloudXYZI>(
-        dense_pub_en_ ? *cloud_undistort_ : *feats_down_body_);
-    // If PCD saving is enabled and we're not publishing dense, we still need the full cloud
-    if (pcd_save_en_ && !dense_pub_en_) {
-      job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
+    // One copy of the full deskewed cloud covers cloud_registered_dense, the PCD
+    // writer and the lidar/body/base frame publishes, all of which want every point.
+    const bool need_full = dense_pub_en_ || dense_full_pub_en_ || pcd_save_en_ ||
+                           scan_lidar_pub_en_ || scan_body_pub_en_ || scan_base_pub_en_;
+    if (need_full) {
+      job.full_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
     }
-    // publishFrame always uses cloud_undistort_ — provide it via pcd_cloud when not dense
-    if (!dense_pub_en_ && (scan_lidar_pub_en_ || scan_body_pub_en_ || scan_base_pub_en_)) {
-      if (!job.pcd_cloud) {
-        job.pcd_cloud = std::make_shared<PointCloudXYZI>(*cloud_undistort_);
-      }
-    }
+    job.cloud = dense_pub_en_ ? job.full_cloud
+                              : std::make_shared<PointCloudXYZI>(*feats_down_body_);
+    // publishFrameWorld/publishFrame fall back to job.cloud when this is null
+    job.pcd_cloud         = dense_pub_en_ ? nullptr : job.full_cloud;
     job.state             = latest_state_;
     job.lidar_end_time    = lidar_end_time_;
     job.dense             = dense_pub_en_;
+    job.dense_full_pub_en = dense_full_pub_en_;
     job.scan_lidar_pub_en = scan_lidar_pub_en_;
     job.scan_body_pub_en  = scan_body_pub_en_;
     job.scan_base_pub_en  = scan_base_pub_en_;

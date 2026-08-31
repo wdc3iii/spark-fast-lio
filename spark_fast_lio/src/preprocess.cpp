@@ -153,6 +153,7 @@ void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg &msg) {
         if ((abs(pl_full[i].x - pl_full[i - 1].x) > 1e-7) ||
             (abs(pl_full[i].y - pl_full[i - 1].y) > 1e-7) ||
             (abs(pl_full[i].z - pl_full[i - 1].z) > 1e-7)) {
+          set_raw_range(pl_full[i]);
           pl_buff[msg.points[i].line].push_back(pl_full[i]);
         }
       }
@@ -203,6 +204,7 @@ void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg &msg) {
               (pl_full[i].x * pl_full[i].x + pl_full[i].y * pl_full[i].y +
                    pl_full[i].z * pl_full[i].z >
                (blind * blind))) {
+            set_raw_range(pl_full[i]);
             pl_surf.push_back(pl_full[i]);
           }
         }
@@ -249,6 +251,7 @@ void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2 &msg) {
 
       added_pt.curvature = pl_orig.points[i].t * time_unit_scale;
       if (pl_orig.points[i].ring < N_SCANS) {
+        set_raw_range(added_pt);
         pl_buff[pl_orig.points[i].ring].push_back(added_pt);
       }
     }
@@ -292,6 +295,7 @@ void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2 &msg) {
       added_pt.normal_z  = 0;
       added_pt.curvature = pl_orig.points[i].t * time_unit_scale;  // curvature unit: ms
 
+      set_raw_range(added_pt);
       pl_surf.points.push_back(added_pt);
     }
   }
@@ -350,6 +354,7 @@ void Preprocess::kmoust64_handler(const sensor_msgs::msg::PointCloud2 &msg) {
 
       added_pt.curvature = pl_orig.points[i].t * time_unit_scale;
       if (pl_orig.points[i].ring < N_SCANS) {
+        set_raw_range(added_pt);
         pl_buff[pl_orig.points[i].ring].push_back(added_pt);
       }
     }
@@ -393,6 +398,7 @@ void Preprocess::kmoust64_handler(const sensor_msgs::msg::PointCloud2 &msg) {
       added_pt.normal_z  = 0;
       added_pt.curvature = pl_orig.points[i].t * time_unit_scale;  // curvature unit: nanoseconds
 
+      set_raw_range(added_pt);
       pl_surf.points.push_back(added_pt);
     }
   }
@@ -464,6 +470,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2 &msg) {
         time_last[layer] = added_pt.curvature;
       }
 
+      set_raw_range(added_pt);
       pl_buff[layer].points.push_back(added_pt);
     }
 
@@ -531,6 +538,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2 &msg) {
       if (i % point_filter_num == 0) {
         if (added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z >
             (blind * blind)) {
+          set_raw_range(added_pt);
           if (is_from_pilot_zone(added_pt.x, added_pt.y, added_pt.z)) {
             // Only for visualization
             pl_from_pilots.push_back(added_pt);
@@ -575,6 +583,7 @@ void Preprocess::hesai_handler(const sensor_msgs::msg::PointCloud2 &msg) {
     added_pt.curvature = (pt.timestamp - first_timestamp) * 1000.0;
 
     if (i % point_filter_num == 0) {
+      set_raw_range(added_pt);
       pl_surf.push_back(std::move(added_pt));
     }
   }
@@ -605,6 +614,7 @@ void Preprocess::default_handler(const sensor_msgs::msg::PointCloud2 &msg) {
 
     if (added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z >
         (blind * blind)) {
+      set_raw_range(added_pt);
       pl_surf.push_back(added_pt);
     }
   }
@@ -831,6 +841,7 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, std::vector<orgtyp
         ap.z         = pl[j].z;
         ap.intensity = pl[j].intensity;
         ap.curvature = pl[j].curvature;
+        set_raw_range(ap);
         pl_surf.push_back(ap);
 
         last_surface = -1;
@@ -853,6 +864,7 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, std::vector<orgtyp
         ap.z /= (j - last_surface);
         ap.intensity /= (j - last_surface);
         ap.curvature /= (j - last_surface);
+        set_raw_range(ap);
         pl_surf.push_back(ap);
       }
       last_surface = -1;

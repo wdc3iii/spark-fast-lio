@@ -18,6 +18,16 @@
 typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 
+// Stash the point's raw (pre-deskew) range in the otherwise unused normal_x field.
+// Motion compensation moves a point by up to the platform's travel during one scan,
+// so a range cut applied after deskewing must be tested against this value to keep
+// the true sensor geometry. normal_x/y/z are never read anywhere else.
+static inline void set_raw_range(PointType &p) {
+  p.normal_x = sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+  p.normal_y = 0;
+  p.normal_z = 0;
+}
+
 enum LID_TYPE { AVIA = 1, VELO16 = 2, OUST64 = 3, KMOUST64 = 4, HESAI = 5, DEFAULT_LIDAR = 6 };  // {1, 2, 3, 4, 5, 6}
 enum TIME_UNIT { SEC = 0, MS = 1, US = 2, NS = 3 };
 enum Feature { Nor, Poss_Plane, Real_Plane, Edge_Jump, Edge_Plane, Wire, ZeroPoint };
